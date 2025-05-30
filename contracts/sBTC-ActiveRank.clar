@@ -157,3 +157,109 @@
         )
     )
 )
+
+;; Claim rewards for completed goals
+(define-public (claim-challenge-reward (challenge-id uint))
+    (let
+        ((athlete-address tx-sender)
+         (athlete-data (unwrap! (map-get? athlete-profiles athlete-address) ERR-USER-PROFILE-NOT-FOUND)))
+
+        (asserts! (<= challenge-id (get ongoing-challenge-count athlete-data)) ERR-INVALID-CHALLENGE-ID)
+
+        (let
+            ((challenge-data (unwrap! (map-get? workout-challenges {athlete-address: athlete-address, challenge-id: challenge-id}) ERR-INVALID-CHALLENGE-ID)))
+
+            (asserts! (get challenge-completed challenge-data) ERR-INVALID-FITNESS-GOAL)
+            (asserts! (>= (var-get global-reward-pool) (get token-reward challenge-data)) ERR-INSUFFICIENT-REWARD-BALANCE)
+
+            ;; Transfer rewards
+            (var-set global-reward-pool (- (var-get global-reward-pool) (get token-reward challenge-data)))
+            (map-set athlete-profiles
+                athlete-address
+                (merge athlete-data {
+                    earned-tokens: (+ (get earned-tokens athlete-data) (get token-reward challenge-data))
+                })
+            )
+
+            (ok (get token-reward challenge-data))
+        )
+    )
+)
+
+;; Private functions
+
+;; Calculate reward amount based on target
+(define-private (calculate-challenge-reward (workout-target uint))
+    (let
+        ((base-reward-rate u100))
+        (* base-reward-rate (/ workout-target u100))
+    )
+)
+
+;; Calculate points for activity
+(define-private (calculate-health-points (workout-units uint))
+    (* workout-units u10)
+)
+
+;; Calculate user level based on points
+(define-private (calculate-athlete-rank (total-points uint))
+    (+ u1 (/ total-points u1000))
+)
+
+;; Award achievement badge
+(define-private (issue-badge (athlete-address principal) (badge-name (string-ascii 30)))
+    (let
+        ((existing-badges (default-to (list) (map-get? athlete-badges athlete-address))))
+        (map-set athlete-badges
+            athlete-address
+            (unwrap-panic (as-max-len? (append existing-badges badge-name) u10))
+        )
+    )
+)
+
+;; Read-only functions
+
+;; Get user profile
+(define-read-only (get-athlete-profile (athlete-address principal))
+    (map-get? athlete-profiles athlete-address)
+)
+
+;; Get goal details
+(define-read-only (get-challenge-details (athlete-address principal) (challenge-id uint))
+    (map-get? workout-challenges {athlete-address: athlete-address, challenge-id: challenge-id})
+)
+
+;; Get user achievements
+(define-read-only (get-athlete-badges (athlete-address principal))
+    (map-get? athlete-badges athlete-address)
+)
+
+;; Get contract stats
+(define-read-only (get-platform-metrics)
+    {
+        total-athletes: (var-get member-count),
+        available-rewards: (var-get global-reward-pool)
+    }
+)
+
+;; Administrative functions
+
+;; Add funds to reward pool (only contract administrator)
+(define-public (add-reward-tokens (token-amount uint))
+    (begin
+        (asserts! (is-eq tx-sender (var-get platform-admin)) ERR-UNAUTHORIZED-ACCESS)
+        (asserts! (> token-amount u0) ERR-INVALID-REWARD-AMOUNT)
+        (var-set global-reward-pool (+ (var-get global-reward-pool) token-amount))
+        (ok true)
+    )
+)
+
+;; Transfer contract ownership
+(define-public (transfer-platform-control (new-admin principal))
+    (begin
+        (asserts! (is-eq tx-sender (var-get platform-admin)) ERR-UNAUTHORIZED-ACCESS)
+        (asserts! (not (is-eq new-admin (var-get platform-admin))) ERR-UNAUTHORIZED-ACCESS)
+        (var-set platform-admin new-admin)
+        (ok true)
+    )
+)
